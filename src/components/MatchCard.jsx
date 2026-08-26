@@ -1,9 +1,6 @@
 import { useState } from "react";
 
-export default function MatchCard({
-  match,
-  onPredict
-}) {
+export default function MatchCard({ match, onPredict }) {
   const homeName =
     match.teams?.home?.name ||
     match.home_team ||
@@ -14,33 +11,51 @@ export default function MatchCard({
     match.away_team ||
     "Away";
 
-  const [homeScore, setHomeScore] =
-    useState(1);
+  const homeLogo =
+    match.teams?.home?.logo ||
+    match.home_logo ||
+    "";
 
-  const [awayScore, setAwayScore] =
-    useState(0);
+  const awayLogo =
+    match.teams?.away?.logo ||
+    match.away_logo ||
+    "";
 
-  const [result, setResult] =
-    useState("HOME");
+  const [homeScore, setHomeScore] = useState(1);
+  const [awayScore, setAwayScore] = useState(0);
 
-  const [firstTeam, setFirstTeam] =
-    useState("HOME");
+  const [result, setResult] = useState("HOME");
+  const [firstTeam, setFirstTeam] = useState("HOME");
+  const [firstScorer, setFirstScorer] = useState("");
+  const [cards, setCards] = useState("HOME");
 
-  const [firstScorer, setFirstScorer] =
-    useState("");
+  const kickoffDate =
+    match.fixture?.date ||
+    match.kickoff ||
+    null;
 
-  const [cards, setCards] =
-    useState("HOME");
+  const kickoff = kickoffDate
+    ? new Date(kickoffDate)
+    : null;
 
-  const kickoff = match.fixture?.date
-    ? new Date(
-        match.fixture.date
-      ).toLocaleString()
-    : match.kickoff
-      ? new Date(
-          match.kickoff
-        ).toLocaleString()
-      : "TBD";
+  const dateText = kickoff
+    ? kickoff.toLocaleDateString(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      })
+    : "TBD";
+
+  const timeText = kickoff
+    ? kickoff.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "TBD";
+
+  const competition =
+    match.league?.name ||
+    "Football";
 
   function submit() {
     onPredict({
@@ -61,141 +76,190 @@ export default function MatchCard({
         firstScorer,
 
       predicted_cards:
-        cards
+        cards,
     });
   }
 
   return (
     <article className="match-card">
-      <div className="match-top">
-        <span>{kickoff}</span>
+      {/* HEADER */}
+      <div className="match-card-header">
+        <div>
+          <span className="match-competition">
+            {competition}
+          </span>
 
-        <span>
-          {match.league?.name || ""}
-        </span>
+          <span className="match-date">
+            {dateText}
+          </span>
+        </div>
+
+        <div className="match-kickoff">
+          <strong>{timeText}</strong>
+          <span>Kickoff</span>
+        </div>
       </div>
 
-      <div className="teams">
-        <b>{homeName}</b>
-
-        <span>vs</span>
-
-        <b>{awayName}</b>
-      </div>
-
-      <div className="prediction-grid">
-        <label>
-          Result
-
-          <select
-            value={result}
-            onChange={(e) =>
-              setResult(e.target.value)
-            }
-          >
-            <option value="HOME">
-              {homeName}
-            </option>
-
-            <option value="DRAW">
-              Draw
-            </option>
-
-            <option value="AWAY">
-              {awayName}
-            </option>
-          </select>
-        </label>
-
-        <label>
-          Exact score
-
-          <div className="score-input">
-            <input
-              type="number"
-              min="0"
-              max="30"
-              value={homeScore}
-              onChange={(e) =>
-                setHomeScore(e.target.value)
-              }
+      {/* TEAMS */}
+      <div className="match-teams">
+        <div className="team">
+          {homeLogo ? (
+            <img
+              src={homeLogo}
+              alt={homeName}
+              className="team-logo"
             />
+          ) : (
+            <div className="team-logo-placeholder">
+              ⚽
+            </div>
+          )}
 
-            <span>:</span>
+          <strong>{homeName}</strong>
+        </div>
 
-            <input
-              type="number"
-              min="0"
-              max="30"
-              value={awayScore}
-              onChange={(e) =>
-                setAwayScore(e.target.value)
-              }
+        <div className="versus">
+          <span>VS</span>
+        </div>
+
+        <div className="team">
+          {awayLogo ? (
+            <img
+              src={awayLogo}
+              alt={awayName}
+              className="team-logo"
             />
-          </div>
-        </label>
+          ) : (
+            <div className="team-logo-placeholder">
+              ⚽
+            </div>
+          )}
 
-        <label>
-          First team to score
-
-          <select
-            value={firstTeam}
-            onChange={(e) =>
-              setFirstTeam(e.target.value)
-            }
-          >
-            <option value="HOME">
-              {homeName}
-            </option>
-
-            <option value="AWAY">
-              {awayName}
-            </option>
-
-            <option value="NONE">
-              No goal
-            </option>
-          </select>
-        </label>
-
-        <label>
-          First goalscorer
-
-          <input
-            value={firstScorer}
-            onChange={(e) =>
-              setFirstScorer(e.target.value)
-            }
-            placeholder="Player"
-          />
-        </label>
-
-        <label>
-          More cards
-
-          <select
-            value={cards}
-            onChange={(e) =>
-              setCards(e.target.value)
-            }
-          >
-            <option value="HOME">
-              {homeName}
-            </option>
-
-            <option value="AWAY">
-              {awayName}
-            </option>
-
-            <option value="SAME">
-              Same
-            </option>
-          </select>
-        </label>
+          <strong>{awayName}</strong>
+        </div>
       </div>
 
+      {/* PREDICTION */}
+      <div className="prediction-section">
+        <div className="prediction-title">
+          Your prediction
+        </div>
+
+        <div className="prediction-grid">
+          <label>
+            <span>Result</span>
+
+            <select
+              value={result}
+              onChange={(e) =>
+                setResult(e.target.value)
+              }
+            >
+              <option value="HOME">
+                {homeName} win
+              </option>
+
+              <option value="DRAW">
+                Draw
+              </option>
+
+              <option value="AWAY">
+                {awayName} win
+              </option>
+            </select>
+          </label>
+
+          <label>
+            <span>Exact score</span>
+
+            <div className="score-input">
+              <input
+                type="number"
+                min="0"
+                max="30"
+                value={homeScore}
+                onChange={(e) =>
+                  setHomeScore(e.target.value)
+                }
+              />
+
+              <b>:</b>
+
+              <input
+                type="number"
+                min="0"
+                max="30"
+                value={awayScore}
+                onChange={(e) =>
+                  setAwayScore(e.target.value)
+                }
+              />
+            </div>
+          </label>
+
+          <label>
+            <span>First team to score</span>
+
+            <select
+              value={firstTeam}
+              onChange={(e) =>
+                setFirstTeam(e.target.value)
+              }
+            >
+              <option value="HOME">
+                {homeName}
+              </option>
+
+              <option value="AWAY">
+                {awayName}
+              </option>
+
+              <option value="NONE">
+                No goal
+              </option>
+            </select>
+          </label>
+
+          <label>
+            <span>First goalscorer</span>
+
+            <input
+              value={firstScorer}
+              onChange={(e) =>
+                setFirstScorer(e.target.value)
+              }
+              placeholder="Enter player"
+            />
+          </label>
+
+          <label>
+            <span>More cards</span>
+
+            <select
+              value={cards}
+              onChange={(e) =>
+                setCards(e.target.value)
+              }
+            >
+              <option value="HOME">
+                {homeName}
+              </option>
+
+              <option value="AWAY">
+                {awayName}
+              </option>
+
+              <option value="SAME">
+                Same
+              </option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {/* SAVE */}
       <button
-        className="primary"
+        className="primary match-save-button"
         onClick={submit}
       >
         Save prediction
