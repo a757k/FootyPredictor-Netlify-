@@ -1,52 +1,38 @@
 import { useEffect, useState } from "react";
 
 export default function InstallButton() {
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [showButton, setShowButton] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null);
 
   useEffect(() => {
-    function handleBeforeInstallPrompt(event) {
+    const handler = (event) => {
       event.preventDefault();
-      setDeferredPrompt(event);
-      setShowButton(true);
-    }
+      setInstallPrompt(event);
+    };
 
-    window.addEventListener(
-      "beforeinstallprompt",
-      handleBeforeInstallPrompt
-    );
+    window.addEventListener("beforeinstallprompt", handler);
 
     return () => {
-      window.removeEventListener(
-        "beforeinstallprompt",
-        handleBeforeInstallPrompt
-      );
+      window.removeEventListener("beforeinstallprompt", handler);
     };
   }, []);
 
   async function installApp() {
-    if (!deferredPrompt) return;
-
-    deferredPrompt.prompt();
-
-    const { outcome } = await deferredPrompt.userChoice;
-
-    if (outcome === "accepted") {
-      setShowButton(false);
+    if (!installPrompt) {
+      alert(
+        "To install FootyPredictor:\n\n" +
+        "Android/Chrome: open the browser menu and choose 'Install app' or 'Add to Home screen'.\n\n" +
+        "iPhone: tap Share → Add to Home Screen."
+      );
+      return;
     }
 
-    setDeferredPrompt(null);
-  }
-
-  if (!showButton) {
-    return null;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
   }
 
   return (
-    <button
-      className="install-app"
-      onClick={installApp}
-    >
+    <button className="install-app" onClick={installApp}>
       Install App
     </button>
   );
