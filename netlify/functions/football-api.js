@@ -1,17 +1,23 @@
 export default async (request) => {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
 
+  const json = (body, status = 200, extraHeaders = {}) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+    });
+
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({
-        error: "FOOTBALL_DATA_API_KEY is not configured.",
-      }),
+    return json(
       {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+        response: [],
+        error:
+          "FOOTBALL_DATA_API_KEY is not configured.",
+      },
+      500
     );
   }
 
@@ -23,6 +29,12 @@ export default async (request) => {
 
     const date =
       url.searchParams.get("date");
+
+    const dateFrom =
+      url.searchParams.get("dateFrom");
+
+    const dateTo =
+      url.searchParams.get("dateTo");
 
     const season =
       url.searchParams.get("season");
@@ -37,24 +49,37 @@ export default async (request) => {
       competitionMap[String(league)];
 
     if (!competition) {
-      return new Response(
-        JSON.stringify({
+      return json(
+        {
           response: [],
           error:
             "This competition is not currently supported by football-data.org.",
-        }),
-        {
-          status: 400,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+        },
+        400
       );
     }
 
     const params = new URLSearchParams();
 
-    if (date) {
+    /*
+     * Support a date range.
+     *
+     * dateFrom/dateTo are preferred because the Fixtures
+     * page can retrieve several days of fixtures with ONE
+     * football-data.org request.
+     */
+    if (dateFrom) {
+      params.set("dateFrom", dateFrom);
+    }
+
+    if (dateTo) {
+      params.set("dateTo", dateTo);
+    }
+
+    /*
+     * Keep compatibility with the old date parameter.
+     */
+    if (!dateFrom && !dateTo && date) {
       params.set("dateFrom", date);
       params.set("dateTo", date);
     }
@@ -82,19 +107,26 @@ export default async (request) => {
 
     const data = await response.json();
 
+    /*
+     * If football-data.org rate-limits us, return a clear
+     * response instead of crashing the function.
+     *
+     * The Fixtures page will keep its cached fixtures.
+     */
     if (!response.ok) {
-      return new Response(
-        JSON.stringify({
+      return json(
+        {
           response: [],
           error:
             data?.message ||
             `football-data.org returned HTTP ${response.status}.`,
-        }),
+          rateLimited:
+            response.status === 429,
+        },
+        response.status,
         {
-          status: response.status,
-          headers: {
-            "Content-Type": "application/json",
-          },
+          "Cache-Control":
+            "no-store",
         }
       );
     }
@@ -103,18 +135,18 @@ export default async (request) => {
       ? data.matches
       : [];
 
-    const converted = matches.map((match) => {
-      const statusMap = {
-        SCHEDULED: "NS",
-        TIMED: "NS",
-        IN_PLAY: "LIVE",
-        PAUSED: "HT",
-        FINISHED: "FT",
-        POSTPONED: "PST",
-        SUSPENDED: "SUSP",
-        CANCELLED: "CANC",
-      };
+    const statusMap = {
+      SCHEDULED: "NS",
+      TIMED: "NS",
+      IN_PLAY: "LIVE",
+      PAUSED: "HT",
+      FINISHED: "FT",
+      POSTPONED: "PST",
+      SUSPENDED: "SUSP",
+      CANCELLED: "CANC",
+    };
 
+    const converted = matches.map((match) => {
       return {
         fixture: {
           id: match.id,
@@ -173,6 +205,7 @@ export default async (request) => {
           home:
             match.score?.fullTime?.home ??
             null,
+
           away:
             match.score?.fullTime?.away ??
             null,
@@ -183,6 +216,7 @@ export default async (request) => {
             home:
               match.score?.fullTime?.home ??
               null,
+
             away:
               match.score?.fullTime?.away ??
               null,
@@ -198,34 +232,34 @@ export default async (request) => {
       );
     });
 
-    return new Response(
-      JSON.stringify({
+    return json(
+      {
         response: converted,
         results: converted.length,
         source: "football-data.org",
-      }),
+      },
+      200,
       {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control":
-            "public, max-age=60",
-        },
+        /*
+         * Let the browser/CDN reuse a successful response
+         * for 60 seconds.
+         */
+        "Cache-Control":
+          "public, max-age=60, stale-while-revalidate=300",
       }
     );
   } catch (error) {
-    return new Response(
-      JSON.stringify({
+    return json(
+      {
         response: [],
         error:
           error?.message ||
           "Unable to retrieve football fixtures.",
-      }),
+      },
+      500,
       {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
+        "Cache-Control":
+          "no-store",
       }
     );
   }
