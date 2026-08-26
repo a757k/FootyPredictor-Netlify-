@@ -1,7 +1,4 @@
-import {
-  useEffect,
-  useState
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { apiFootball } from "../lib/api";
 import MatchCard from "../components/MatchCard";
@@ -10,70 +7,245 @@ import { supabase } from "../lib/supabaseClient";
 const LEAGUES = [
   {
     id: 39,
-    name: "Premier League"
+    name: "Premier League",
   },
   {
     id: 140,
-    name: "LaLiga"
+    name: "LaLiga",
   },
   {
     id: 2,
-    name: "Champions League"
-  }
+    name: "Champions League",
+  },
 ];
 
 function getSeason(date) {
-  const year =
-    new Date(date).getFullYear();
+  const d = new Date(date);
+  const month = d.getMonth() + 1;
+  const year = d.getFullYear();
 
-  return year;
+  // European football seasons normally begin in the
+  // second half of the calendar year.
+  if (month >= 7) {
+    return year;
+  }
+
+  return year - 1;
 }
 
-export default function Fixtures({
-  user
-}) {
-  const [league, setLeague] =
-    useState(39);
+function formatDate(dateString) {
+  const date = new Date(dateString);
 
-  const [date, setDate] =
-    useState(
-      new Date()
-        .toISOString()
-        .slice(0, 10)
-    );
+  return date.toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
 
-  const [matches, setMatches] =
-    useState([]);
+function formatTime(dateString) {
+  const date = new Date(dateString);
 
-  const [loading, setLoading] =
-    useState(true);
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
-  const [error, setError] =
-    useState("");
+function getWeekKey(dateString) {
+  const date = new Date(dateString);
+
+  const start = new Date(date);
+  const day = start.getDay();
+
+  const difference = day === 0 ? -6 : 1 - day;
+
+  start.setDate(start.getDate() + difference);
+  start.setHours(0, 0, 0, 0);
+
+  return start.toISOString().slice(0, 10);
+}
+
+function getWeekLabel(dateString) {
+  const date = new Date(dateString);
+
+  const start = new Date(date);
+  const day = start.getDay();
+
+  const difference = day === 0 ? -6 : 1 - day;
+
+  start.setDate(start.getDate() + difference);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+
+  const startText = start.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+
+  const endText = end.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+
+  return `${startText} – ${endText}`;
+}
+
+export default function Fixtures({ user }) {
+  const [league, setLeague] = useState(39);
+
+  const [date, setDate] = useState(
+    new Date().toISOString().slice(0, 10)
+  );
+
+  const [matches, setMatches] = useState([]);
+
+  const [loading, setLoading] = useState(true);
+
+  const [error, setError] = useState("");
+
+  const [viewMode, setViewMode] = useState("upcoming");
+
+  const [gameweek, setGameweek] = useState("all");
 
   async function loadFixtures() {
     setLoading(true);
     setError("");
 
     try {
-      const data =
-        await apiFootball(
-          "fixtures",
-          {
-            league,
-            season: getSeason(date),
-            date
-          }
-        );
+      const selectedDate = new Date(date);
 
-      setMatches(
-        data.response || []
+      let allMatches = [];
+
+      /*
+       * Upcoming mode:
+       *
+       * Instead of asking API-Football for only ONE date,
+       * request the next several days.
+       *
+       * This prevents the page from appearing empty simply
+       * because there are no games today.
+       */
+      if (viewMode === "upcoming") {
+        const requests = [];
+
+        for (let i = 0; i < 14; i += 1) {
+          const currentDate = new Date(selectedDate);
+
+          currentDate.setDate(
+            currentDate.getDate() + i
+          );
+
+          const dateString =
+            currentDate.toISOString().slice(0, 10);
+
+          requests.push(
+            apiFootball("fixtures", {
+              league,
+              season: getSeason(dateString),
+              date: dateString,
+            })
+          );
+        }
+
+        const results = await Promise.all(requests);
+
+        results.forEach((result) => {
+          if (result?.response) {
+            allMatches.push(...result.response);
+          }
+        });
+      } else {
+        /*
+         * Gameweek mode:
+         *
+         * First find fixtures around the selected date.
+         * The API's response includes the round/gameweek
+         * information when available.
+         */
+        const requests = [];
+
+        for (let i = -3; i <= 10; i += 1) {
+          const currentDate = new Date(selectedDate);
+
+          currentDate.setDate(
+            currentDate.getDate() + i
+          );
+
+          const dateString =
+            currentDate.toISOString().slice(0, 10);
+
+          requests.push(
+            apiFootball("fixtures", {
+              league,
+              season: getSeason(dateString),
+              date: dateString,
+            })
+          );
+        }
+
+        const results = await Promise.all(requests);
+
+        results.forEach((result) => {
+          if (result?.response) {
+            allMatches.push(...result.response);
+          }
+        });
+      }
+
+      /*
+       * Remove duplicate matches.
+       */
+      const uniqueMatches = Array.from(
+        new Map(
+          allMatches.map((match) => [
+            match.fixture?.id,
+            match,
+          ])
+        ).values()
       );
-    } catch (error) {
+
+      /*
+       * Only show matches from the selected league.
+       */
+      const leagueMatches = uniqueMatches.filter(
+        (match) =>
+          Number(match.league?.id) === Number(league)
+      );
+
+      /*
+       * Sort by actual kickoff time:
+       *
+       * closest → farthest
+       */
+      leagueMatches.sort((a, b) => {
+        const first = new Date(
+          a.fixture?.date || 0
+        ).getTime();
+
+        const second = new Date(
+          b.fixture?.date || 0
+        ).getTime();
+
+        return first - second;
+      });
+
+      setMatches(leagueMatches);
+
+      if (leagueMatches.length === 0) {
+        setError(
+          "No upcoming fixtures were found for this competition."
+        );
+      }
+    } catch (err) {
       setError(
-        error.message ||
+        err?.message ||
           "Unable to load fixtures."
       );
+
+      setMatches([]);
     } finally {
       setLoading(false);
     }
@@ -81,7 +253,68 @@ export default function Fixtures({
 
   useEffect(() => {
     loadFixtures();
-  }, [league, date]);
+  }, [league, date, viewMode]);
+
+  const availableGameweeks = useMemo(() => {
+    const weeks = new Map();
+
+    matches.forEach((match) => {
+      const round =
+        match.league?.round || "Unknown";
+
+      if (!weeks.has(round)) {
+        weeks.set(round, {
+          round,
+          matches: [],
+        });
+      }
+
+      weeks.get(round).matches.push(match);
+    });
+
+    return Array.from(weeks.values());
+  }, [matches]);
+
+  const displayedMatches = useMemo(() => {
+    if (gameweek === "all") {
+      return matches;
+    }
+
+    return matches.filter(
+      (match) =>
+        match.league?.round === gameweek
+    );
+  }, [matches, gameweek]);
+
+  const groupedMatches = useMemo(() => {
+    const groups = new Map();
+
+    displayedMatches.forEach((match) => {
+      const kickoff = match.fixture?.date;
+
+      if (!kickoff) {
+        return;
+      }
+
+      const key = getWeekKey(kickoff);
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          label: getWeekLabel(kickoff),
+          matches: [],
+        });
+      }
+
+      groups.get(key).matches.push(match);
+    });
+
+    return Array.from(groups.values()).sort(
+      (a, b) =>
+        new Date(a.key).getTime() -
+        new Date(b.key).getTime()
+    );
+  }, [displayedMatches]);
 
   async function savePrediction(prediction) {
     if (!user) {
@@ -92,8 +325,7 @@ export default function Fixtures({
       return;
     }
 
-    const match =
-      prediction.match;
+    const match = prediction.match;
 
     const homeTeamId =
       match.teams?.home?.id || null;
@@ -103,7 +335,7 @@ export default function Fixtures({
 
     const {
       data: savedMatch,
-      error: matchError
+      error: matchError,
     } = await supabase
       .from("matches")
       .upsert(
@@ -112,10 +344,12 @@ export default function Fixtures({
             match.fixture.id,
 
           home_team:
-            match.teams.home.name,
+            match.teams?.home?.name ||
+            "Unknown",
 
           away_team:
-            match.teams.away.name,
+            match.teams?.away?.name ||
+            "Unknown",
 
           home_team_id:
             homeTeamId,
@@ -127,11 +361,12 @@ export default function Fixtures({
             match.fixture.date,
 
           status:
-            match.fixture.status.short
+            match.fixture.status?.short ||
+            "NS",
         },
         {
           onConflict:
-            "api_match_id"
+            "api_match_id",
         }
       )
       .select()
@@ -143,7 +378,7 @@ export default function Fixtures({
     }
 
     const {
-      error: predictionError
+      error: predictionError,
     } = await supabase
       .from("predictions")
       .upsert(
@@ -169,11 +404,11 @@ export default function Fixtures({
             prediction.predicted_first_scorer,
 
           predicted_cards:
-            prediction.predicted_cards
+            prediction.predicted_cards,
         },
         {
           onConflict:
-            "user_id,match_id"
+            "user_id,match_id",
         }
       );
 
@@ -199,16 +434,23 @@ export default function Fixtures({
           </p>
 
           <h1>Fixtures</h1>
+
+          <p>
+            Upcoming matches are ordered from
+            closest kickoff to farthest kickoff.
+          </p>
         </div>
 
         <div className="filters">
           <select
             value={league}
-            onChange={(e) =>
+            onChange={(e) => {
               setLeague(
                 Number(e.target.value)
-              )
-            }
+              );
+
+              setGameweek("all");
+            }}
           >
             {LEAGUES.map(
               (competition) => (
@@ -225,20 +467,61 @@ export default function Fixtures({
           <input
             type="date"
             value={date}
-            onChange={(e) =>
-              setDate(e.target.value)
-            }
+            onChange={(e) => {
+              setDate(e.target.value);
+              setGameweek("all");
+            }}
           />
+
+          <select
+            value={viewMode}
+            onChange={(e) => {
+              setViewMode(e.target.value);
+              setGameweek("all");
+            }}
+          >
+            <option value="upcoming">
+              Upcoming fixtures
+            </option>
+
+            <option value="gameweek">
+              Gameweeks
+            </option>
+          </select>
+
+          {viewMode === "gameweek" && (
+            <select
+              value={gameweek}
+              onChange={(e) =>
+                setGameweek(e.target.value)
+              }
+            >
+              <option value="all">
+                All gameweeks
+              </option>
+
+              {availableGameweeks.map(
+                (week) => (
+                  <option
+                    key={week.round}
+                    value={week.round}
+                  >
+                    {week.round}
+                  </option>
+                )
+              )}
+            </select>
+          )}
         </div>
       </div>
 
       {loading && (
         <div className="loading">
-          Loading fixtures...
+          Loading upcoming fixtures...
         </div>
       )}
 
-      {error && (
+      {error && !loading && (
         <div className="error">
           {error}
         </div>
@@ -246,26 +529,115 @@ export default function Fixtures({
 
       {!loading &&
         !error &&
-        matches.length === 0 && (
+        displayedMatches.length === 0 && (
           <div className="empty">
-            No fixtures were returned
-            for this date.
+            No fixtures were found.
           </div>
         )}
 
       {!loading &&
         !error &&
-        matches.length > 0 && (
+        displayedMatches.length > 0 && (
           <div className="match-list">
-            {matches.map((match) => (
-              <MatchCard
-                key={match.fixture.id}
-                match={match}
-                onPredict={
-                  savePrediction
-                }
-              />
-            ))}
+            {viewMode === "gameweek" &&
+            gameweek === "all"
+              ? groupedMatches.map(
+                  (group) => (
+                    <section
+                      key={group.key}
+                      className="fixture-week"
+                    >
+                      <div className="fixture-week-header">
+                        <h2>
+                          {group.label}
+                        </h2>
+
+                        <span>
+                          {group.matches.length}{" "}
+                          {group.matches.length ===
+                          1
+                            ? "match"
+                            : "matches"}
+                        </span>
+                      </div>
+
+                      {group.matches
+                        .sort(
+                          (a, b) =>
+                            new Date(
+                              a.fixture.date
+                            ).getTime() -
+                            new Date(
+                              b.fixture.date
+                            ).getTime()
+                        )
+                        .map(
+                          (match) => (
+                            <div
+                              key={
+                                match.fixture.id
+                              }
+                              className="fixture-item"
+                            >
+                              <div className="fixture-time">
+                                <strong>
+                                  {formatTime(
+                                    match.fixture
+                                      .date
+                                  )}
+                                </strong>
+
+                                <span>
+                                  {formatDate(
+                                    match.fixture
+                                      .date
+                                  )}
+                                </span>
+                              </div>
+
+                              <MatchCard
+                                match={match}
+                                onPredict={
+                                  savePrediction
+                                }
+                              />
+                            </div>
+                          )
+                        )}
+                    </section>
+                  )
+                )
+              : displayedMatches.map(
+                  (match) => (
+                    <div
+                      key={
+                        match.fixture.id
+                      }
+                      className="fixture-item"
+                    >
+                      <div className="fixture-time">
+                        <strong>
+                          {formatTime(
+                            match.fixture.date
+                          )}
+                        </strong>
+
+                        <span>
+                          {formatDate(
+                            match.fixture.date
+                          )}
+                        </span>
+                      </div>
+
+                      <MatchCard
+                        match={match}
+                        onPredict={
+                          savePrediction
+                        }
+                      />
+                    </div>
+                  )
+                )}
           </div>
         )}
     </main>
