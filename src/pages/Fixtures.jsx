@@ -19,13 +19,14 @@ const LEAGUES = [
   },
 ];
 
+const CACHE_PREFIX = "footypredictor_fixtures_";
+const RETRY_DELAY = 60000;
+
 function getSeason(date) {
   const d = new Date(date);
   const month = d.getMonth() + 1;
   const year = d.getFullYear();
 
-  // European football seasons normally begin in the
-  // second half of the calendar year.
   if (month >= 7) {
     return year;
   }
@@ -93,6 +94,77 @@ function getWeekLabel(dateString) {
   return `${startText} – ${endText}`;
 }
 
+function getCacheKey(league, date) {
+  return `${CACHE_PREFIX}${league}_${date}`;
+}
+
+function readCachedFixtures(league, dates) {
+  const cached = [];
+
+  dates.forEach((date) => {
+    try {
+      const raw = localStorage.getItem(
+        getCacheKey(league, date)
+      );
+
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+
+      if (Array.isArray(parsed?.response)) {
+        cached.push(...parsed.response);
+      }
+    } catch {
+      // Ignore damaged cache entries.
+    }
+  });
+
+  return cached;
+}
+
+function saveCachedFixtures(league, date, response) {
+  try {
+    localStorage.setItem(
+      getCacheKey(league, date),
+      JSON.stringify({
+        savedAt: Date.now(),
+        response,
+      })
+    );
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function uniqueMatches(matches) {
+  return Array.from(
+    new Map(
+      matches
+        .filter((match) => match?.fixture?.id)
+        .map((match) => [
+          match.fixture.id,
+          match,
+        ])
+    ).values()
+  );
+}
+
+function sortMatches(matches) {
+  return [...matches].sort((a, b) => {
+    const first = new Date(
+      a.fixture?.date || 0
+    ).getTime();
+
+    const second = new Date(
+      b.fixture?.date || 0
+    ).getTime();
+
+    return first - second;
+  });
+}
+
 export default function Fixtures({ user }) {
   const [league, setLeague] = useState(39);
 
@@ -110,149 +182,251 @@ export default function Fixtures({ user }) {
 
   const [gameweek, setGameweek] = useState("all");
 
-  async function loadFixtures() {
-    setLoading(true);
-    setError("");
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-    try {
-      const selectedDate = new Date(date);
+  function getDatesToLoad() {
+    const selectedDate = new Date(date);
+    const dates = [];
 
-      let allMatches = [];
+    /*
+     * We still support a 14-day upcoming window,
+     * but cached dates are never requested again
+     * unless they are missing.
+     */
+    const startOffset =
+      viewMode === "upcoming" ? 0 : -3;
 
-      /*
-       * Upcoming mode:
-       *
-       * Instead of asking API-Football for only ONE date,
-       * request the next several days.
-       *
-       * This prevents the page from appearing empty simply
-       * because there are no games today.
-       */
-      if (viewMode === "upcoming") {
-        const requests = [];
+    const endOffset =
+      viewMode === "upcoming" ? 13 : 10;
 
-        for (let i = 0; i < 14; i += 1) {
-          const currentDate = new Date(selectedDate);
-
-          currentDate.setDate(
-            currentDate.getDate() + i
-          );
-
-          const dateString =
-            currentDate.toISOString().slice(0, 10);
-
-          requests.push(
-            apiFootball("fixtures", {
-              league,
-              season: getSeason(dateString),
-              date: dateString,
-            })
-          );
-        }
-
-        const results = await Promise.all(requests);
-
-        results.forEach((result) => {
-          if (result?.response) {
-            allMatches.push(...result.response);
-          }
-        });
-      } else {
-        /*
-         * Gameweek mode:
-         *
-         * First find fixtures around the selected date.
-         * The API's response includes the round/gameweek
-         * information when available.
-         */
-        const requests = [];
-
-        for (let i = -3; i <= 10; i += 1) {
-          const currentDate = new Date(selectedDate);
-
-          currentDate.setDate(
-            currentDate.getDate() + i
-          );
-
-          const dateString =
-            currentDate.toISOString().slice(0, 10);
-
-          requests.push(
-            apiFootball("fixtures", {
-              league,
-              season: getSeason(dateString),
-              date: dateString,
-            })
-          );
-        }
-
-        const results = await Promise.all(requests);
-
-        results.forEach((result) => {
-          if (result?.response) {
-            allMatches.push(...result.response);
-          }
-        });
-      }
-
-      /*
-       * Remove duplicate matches.
-       */
-      const uniqueMatches = Array.from(
-        new Map(
-          allMatches.map((match) => [
-            match.fixture?.id,
-            match,
-          ])
-        ).values()
+    for (
+      let i = startOffset;
+      i <= endOffset;
+      i += 1
+    ) {
+      const currentDate = new Date(
+        selectedDate
       );
 
-      /*
-       * Only show matches from the selected league.
-       */
-      const leagueMatches = uniqueMatches.filter(
-        (match) =>
-          Number(match.league?.id) === Number(league)
+      currentDate.setDate(
+        currentDate.getDate() + i
       );
 
-      /*
-       * Sort by actual kickoff time:
-       *
-       * closest → farthest
-       */
-      leagueMatches.sort((a, b) => {
-        const first = new Date(
-          a.fixture?.date || 0
-        ).getTime();
-
-        const second = new Date(
-          b.fixture?.date || 0
-        ).getTime();
-
-        return first - second;
-      });
-
-      setMatches(leagueMatches);
-
-      if (leagueMatches.length === 0) {
-        setError(
-          "No upcoming fixtures were found for this competition."
-        );
-      }
-    } catch (err) {
-      setError(
-        err?.message ||
-          "Unable to load fixtures."
+      dates.push(
+        currentDate.toISOString().slice(0, 10)
       );
-
-      setMatches([]);
-    } finally {
-      setLoading(false);
     }
+
+    return dates;
+  }
+
+  async function loadFixtures({
+    background = false,
+  } = {}) {
+    const dates = getDatesToLoad();
+
+    /*
+     * ALWAYS show cached fixtures first.
+     *
+     * This is especially important for an installed PWA.
+     */
+    const cachedMatches = readCachedFixtures(
+      league,
+      dates
+    );
+
+    const cachedForLeague = sortMatches(
+      uniqueMatches(
+        cachedMatches.filter(
+          (match) =>
+            Number(match.league?.id) ===
+            Number(league)
+        )
+      )
+    );
+
+    if (cachedForLeague.length > 0) {
+      setMatches(cachedForLeague);
+      setError("");
+      setLoading(false);
+    } else if (!background) {
+      setLoading(true);
+      setError("");
+    }
+
+    /*
+     * Only request dates that aren't already cached.
+     *
+     * This dramatically reduces repeat API calls.
+     */
+    const datesToRequest = dates.filter((dateString) => {
+      try {
+        return !localStorage.getItem(
+          getCacheKey(
+            league,
+            dateString
+          )
+        );
+      } catch {
+        return true;
+      }
+    });
+
+    /*
+     * If everything is cached, don't hit the API.
+     */
+    if (datesToRequest.length === 0) {
+      if (cachedForLeague.length > 0) {
+        setLastUpdated(Date.now());
+      }
+
+      setLoading(false);
+      return;
+    }
+
+    let successfulRequest = false;
+    let failedRequest = false;
+
+    /*
+     * Request dates one at a time rather than firing
+     * 14 requests simultaneously.
+     *
+     * This helps prevent rate limiting.
+     */
+    for (const dateString of datesToRequest) {
+      try {
+        const result = await apiFootball(
+          "fixtures",
+          {
+            league,
+            season: getSeason(dateString),
+            date: dateString,
+          }
+        );
+
+        if (
+          result &&
+          Array.isArray(result.response)
+        ) {
+          saveCachedFixtures(
+            league,
+            dateString,
+            result.response
+          );
+
+          successfulRequest = true;
+
+          /*
+           * Immediately update the screen when
+           * new fixtures arrive.
+           */
+          const allCached =
+            readCachedFixtures(
+              league,
+              dates
+            );
+
+          const updatedMatches =
+            sortMatches(
+              uniqueMatches(
+                allCached.filter(
+                  (match) =>
+                    Number(
+                      match.league?.id
+                    ) === Number(league)
+                )
+              )
+            );
+
+          setMatches(updatedMatches);
+
+          if (updatedMatches.length > 0) {
+            setError("");
+          }
+
+          setLastUpdated(Date.now());
+        } else {
+          failedRequest = true;
+        }
+      } catch (err) {
+        failedRequest = true;
+
+        /*
+         * IMPORTANT:
+         * Do NOT delete the existing fixtures.
+         *
+         * The user can continue seeing cached data.
+         */
+      }
+    }
+
+    /*
+     * If we had cached fixtures, keep showing them even
+     * if some/all API requests failed.
+     */
+    const finalCachedMatches =
+      sortMatches(
+        uniqueMatches(
+          readCachedFixtures(
+            league,
+            dates
+          ).filter(
+            (match) =>
+              Number(match.league?.id) ===
+              Number(league)
+          )
+        )
+      );
+
+    if (finalCachedMatches.length > 0) {
+      setMatches(finalCachedMatches);
+      setError("");
+
+      if (
+        successfulRequest ||
+        failedRequest
+      ) {
+        setLastUpdated(Date.now());
+      }
+    } else if (failedRequest) {
+      setError(
+        "Fixtures are temporarily unavailable. They will retry automatically."
+      );
+    }
+
+    setLoading(false);
   }
 
   useEffect(() => {
-    loadFixtures();
+    let cancelled = false;
+
+    async function initialLoad() {
+      if (cancelled) {
+        return;
+      }
+
+      await loadFixtures();
+    }
+
+    initialLoad();
+
+    /*
+     * Automatically retry every 60 seconds.
+     *
+     * This means the PWA doesn't need a refresh button.
+     */
+    const retryTimer = setInterval(() => {
+      if (!cancelled) {
+        loadFixtures({
+          background: true,
+        });
+      }
+    }, RETRY_DELAY);
+
+    return () => {
+      cancelled = true;
+      clearInterval(retryTimer);
+    };
   }, [league, date, viewMode]);
 
   const availableGameweeks = useMemo(() => {
@@ -272,7 +446,9 @@ export default function Fixtures({ user }) {
       weeks.get(round).matches.push(match);
     });
 
-    return Array.from(weeks.values());
+    return Array.from(
+      weeks.values()
+    );
   }, [matches]);
 
   const displayedMatches = useMemo(() => {
@@ -290,18 +466,21 @@ export default function Fixtures({ user }) {
     const groups = new Map();
 
     displayedMatches.forEach((match) => {
-      const kickoff = match.fixture?.date;
+      const kickoff =
+        match.fixture?.date;
 
       if (!kickoff) {
         return;
       }
 
-      const key = getWeekKey(kickoff);
+      const key =
+        getWeekKey(kickoff);
 
       if (!groups.has(key)) {
         groups.set(key, {
           key,
-          label: getWeekLabel(kickoff),
+          label:
+            getWeekLabel(kickoff),
           matches: [],
         });
       }
@@ -309,7 +488,9 @@ export default function Fixtures({ user }) {
       groups.get(key).matches.push(match);
     });
 
-    return Array.from(groups.values()).sort(
+    return Array.from(
+      groups.values()
+    ).sort(
       (a, b) =>
         new Date(a.key).getTime() -
         new Date(b.key).getTime()
@@ -493,7 +674,9 @@ export default function Fixtures({ user }) {
             <select
               value={gameweek}
               onChange={(e) =>
-                setGameweek(e.target.value)
+                setGameweek(
+                  e.target.value
+                )
               }
             >
               <option value="all">
@@ -515,29 +698,40 @@ export default function Fixtures({ user }) {
         </div>
       </div>
 
-      {loading && (
+      {loading && matches.length === 0 && (
         <div className="loading">
           Loading upcoming fixtures...
         </div>
       )}
 
-      {error && !loading && (
-        <div className="error">
-          {error}
-        </div>
-      )}
+      {error &&
+        !loading &&
+        matches.length === 0 && (
+          <div className="error">
+            {error}
+          </div>
+        )}
 
       {!loading &&
-        !error &&
-        displayedMatches.length === 0 && (
+        matches.length === 0 &&
+        !error && (
           <div className="empty">
             No fixtures were found.
           </div>
         )}
 
-      {!loading &&
-        !error &&
-        displayedMatches.length > 0 && (
+      {matches.length > 0 && (
+        <>
+          <div
+            style={{
+              fontSize: "0.85rem",
+              opacity: 0.65,
+              marginBottom: "12px",
+            }}
+          >
+            Fixtures update automatically.
+          </div>
+
           <div className="match-list">
             {viewMode === "gameweek" &&
             gameweek === "all"
@@ -553,9 +747,12 @@ export default function Fixtures({ user }) {
                         </h2>
 
                         <span>
-                          {group.matches.length}{" "}
-                          {group.matches.length ===
-                          1
+                          {
+                            group.matches
+                              .length
+                          }{" "}
+                          {group.matches
+                            .length === 1
                             ? "match"
                             : "matches"}
                         </span>
@@ -575,21 +772,25 @@ export default function Fixtures({ user }) {
                           (match) => (
                             <div
                               key={
-                                match.fixture.id
+                                match
+                                  .fixture
+                                  .id
                               }
                               className="fixture-item"
                             >
                               <div className="fixture-time">
                                 <strong>
                                   {formatTime(
-                                    match.fixture
+                                    match
+                                      .fixture
                                       .date
                                   )}
                                 </strong>
 
                                 <span>
                                   {formatDate(
-                                    match.fixture
+                                    match
+                                      .fixture
                                       .date
                                   )}
                                 </span>
@@ -639,7 +840,8 @@ export default function Fixtures({ user }) {
                   )
                 )}
           </div>
-        )}
+        </>
+      )}
     </main>
   );
 }
