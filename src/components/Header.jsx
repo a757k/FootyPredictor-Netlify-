@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import InstallButton from "./InstallButton";
 
 export default function Header({
   user,
@@ -12,6 +13,8 @@ export default function Header({
       </Link>
 
       <nav>
+        <InstallButton />
+
         <Link to="/">Home</Link>
 
         <Link to="/fixtures">
