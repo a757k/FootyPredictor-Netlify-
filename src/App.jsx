@@ -12,6 +12,7 @@ import Header from "./components/Header";
 import Home from "./pages/Home";
 import Auth from "./pages/Auth";
 import Fixtures from "./pages/Fixtures";
+import Rankings from "./pages/Rankings";
 import Leagues from "./pages/Leagues";
 import PrivateLeagues from "./pages/PrivateLeagues";
 import Favorites from "./pages/Favorites";
@@ -34,10 +35,12 @@ export default function App() {
 
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
-      setLoading(false);
-    });
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user || null);
+        setLoading(false);
+      }
+    );
 
     return () => {
       mounted = false;
@@ -59,7 +62,10 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Header user={user} onSignOut={signOut} />
+      <Header
+        user={user}
+        onSignOut={signOut}
+      />
 
       <Routes>
         <Route
@@ -74,7 +80,16 @@ export default function App() {
 
         <Route
           path="/fixtures"
-          element={<Fixtures user={user} />}
+          element={
+            <Fixtures user={user} />
+          }
+        />
+
+        <Route
+          path="/rankings"
+          element={
+            <Rankings user={user} />
+          }
         />
 
         <Route
@@ -84,12 +99,16 @@ export default function App() {
 
         <Route
           path="/private"
-          element={<PrivateLeagues user={user} />}
+          element={
+            <PrivateLeagues user={user} />
+          }
         />
 
         <Route
           path="/favorites"
-          element={<Favorites user={user} />}
+          element={
+            <Favorites user={user} />
+          }
         />
 
         <Route
@@ -104,13 +123,20 @@ export default function App() {
 
         <Route
           path="*"
-          element={<Home user={user} />}
+          element={
+            <Home user={user} />
+          }
         />
       </Routes>
 
       <footer>
-        <span>© 2026 FootyPredictor</span>
-        <a href="/terms">Terms & Privacy</a>
+        <span>
+          © 2026 FootyPredictor
+        </span>
+
+        <a href="/terms">
+          Terms & Privacy
+        </a>
       </footer>
     </BrowserRouter>
   );
