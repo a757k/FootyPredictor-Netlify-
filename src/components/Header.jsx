@@ -15,10 +15,16 @@ export default function Header({
       <nav>
         <InstallButton />
 
-        <Link to="/">Home</Link>
+        <Link to="/">
+          Home
+        </Link>
 
         <Link to="/fixtures">
           Fixtures
+        </Link>
+
+        <Link to="/rankings">
+          Rankings
         </Link>
 
         <Link to="/leagues">
