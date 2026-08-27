@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export default async () => {
   const supabaseUrl =
-    process.env.SUPABASE_URL;
+    process.env.VITE_SUPABASE_URL;
 
   const supabaseKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -23,29 +23,21 @@ export default async () => {
       {
         status: 500,
         headers: {
-          "Content-Type":
-            "application/json",
+          "Content-Type": "application/json",
         },
       }
     );
   }
 
-  const supabase =
-    createClient(
-      supabaseUrl,
-      supabaseKey
-    );
+  const supabase = createClient(
+    supabaseUrl,
+    supabaseKey
+  );
 
   try {
-    /*
-     * Find predictions belonging
-     * to matches that have already
-     * kicked off.
-     */
     const {
       data: predictions,
-      error:
-        predictionError,
+      error: predictionError,
     } = await supabase
       .from("predictions")
       .select(`
@@ -68,15 +60,8 @@ export default async () => {
           status
         )
       `)
-      .not(
-        "matches",
-        "is",
-        null
-      )
-      .is(
-        "points_awarded",
-        null
-      );
+      .not("matches", "is", null)
+      .is("points_awarded", null);
 
     if (predictionError) {
       throw predictionError;
@@ -95,8 +80,7 @@ export default async () => {
         {
           status: 200,
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
         }
       );
@@ -104,77 +88,47 @@ export default async () => {
 
     let scoredCount = 0;
 
-    for (
-      const prediction of predictions
-    ) {
-      const match =
-        prediction.matches;
+    for (const prediction of predictions) {
+      const match = prediction.matches;
 
       if (!match) {
         continue;
       }
 
-      /*
-       * Only score matches that
-       * have already kicked off.
-       */
       if (
         !match.kickoff ||
-        new Date(
-          match.kickoff
-        ).getTime() >
+        new Date(match.kickoff).getTime() >
           Date.now()
       ) {
         continue;
       }
 
-      /*
-       * Ask football-data.org
-       * for the finished match.
-       */
-      const response =
-        await fetch(
-          `https://api.football-data.org/v4/matches/${match.api_match_id}`,
-          {
-            headers: {
-              "X-Auth-Token":
-                footballApiKey,
-              Accept:
-                "application/json",
-            },
-          }
-        );
+      const response = await fetch(
+        `https://api.football-data.org/v4/matches/${match.api_match_id}`,
+        {
+          headers: {
+            "X-Auth-Token":
+              footballApiKey,
+            Accept: "application/json",
+          },
+        }
+      );
 
       if (!response.ok) {
         continue;
       }
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
-      const status =
-        data?.status;
-
-      /*
-       * Don't score until the
-       * match is finished.
-       */
-      if (
-        status !==
-        "FINISHED"
-      ) {
+      if (data?.status !== "FINISHED") {
         continue;
       }
 
       const homeScore =
-        data?.score
-          ?.fullTime
-          ?.home;
+        data?.score?.fullTime?.home;
 
       const awayScore =
-        data?.score
-          ?.fullTime
-          ?.away;
+        data?.score?.fullTime?.away;
 
       if (
         homeScore === null ||
@@ -185,44 +139,27 @@ export default async () => {
         continue;
       }
 
-      /*
-       * Determine actual result.
-       */
-      let actualResult =
-        "DRAW";
+      let actualResult = "DRAW";
 
-      if (
-        homeScore >
-        awayScore
-      ) {
-        actualResult =
-          "HOME";
-      } else if (
-        awayScore >
-        homeScore
-      ) {
-        actualResult =
-          "AWAY";
+      if (homeScore > awayScore) {
+        actualResult = "HOME";
+      } else if (awayScore > homeScore) {
+        actualResult = "AWAY";
       }
 
       let points = 0;
 
       /*
        * EXACT SCORE
-       *
-       * Exact score = 10 points.
-       * We don't add the +5 result
-       * points separately.
+       * +10 points
        */
       const exactScore =
         Number(
           prediction.predicted_home_score
-        ) ===
-          Number(homeScore) &&
+        ) === Number(homeScore) &&
         Number(
           prediction.predicted_away_score
-        ) ===
-          Number(awayScore);
+        ) === Number(awayScore);
 
       if (exactScore) {
         points += 10;
@@ -230,31 +167,66 @@ export default async () => {
         prediction.predicted_result ===
         actualResult
       ) {
+        /*
+         * CORRECT RESULT
+         * +5 points
+         */
         points += 5;
       } else {
         /*
-         * Wrong winner/result.
+         * WRONG RESULT
+         * -2 points
          */
         points -= 2;
       }
 
       /*
-       * First team to score,
-       * first goalscorer and cards
-       * require additional match
-       * information that is not
-       * guaranteed by football-data.org.
-       *
-       * We therefore do not award
-       * those points here yet.
-       */
-
-      /*
-       * Record the points event.
+       * Prevent duplicate point events.
        */
       const {
-        error:
-          eventError,
+        data: existingEvent,
+        error: existingError,
+      } = await supabase
+        .from("point_events")
+        .select("id")
+        .eq(
+          "user_id",
+          prediction.user_id
+        )
+        .eq(
+          "match_id",
+          match.id
+        )
+        .limit(1);
+
+      if (existingError) {
+        console.error(existingError);
+        continue;
+      }
+
+      if (
+        existingEvent &&
+        existingEvent.length > 0
+      ) {
+        await supabase
+          .from("predictions")
+          .update({
+            points_awarded: points,
+          })
+          .eq(
+            "id",
+            prediction.id
+          );
+
+        continue;
+      }
+
+      /*
+       * Add points to the
+       * point_events table.
+       */
+      const {
+        error: eventError,
       } = await supabase
         .from("point_events")
         .insert({
@@ -271,32 +243,20 @@ export default async () => {
         });
 
       if (eventError) {
-        /*
-         * If the point event
-         * cannot be recorded,
-         * don't mark the prediction
-         * as scored.
-         */
-        console.error(
-          eventError
-        );
-
+        console.error(eventError);
         continue;
       }
 
       /*
-       * Mark this prediction as
-       * scored so it cannot receive
-       * points again.
+       * Mark the prediction as
+       * scored.
        */
       const {
-        error:
-          updateError,
+        error: updateError,
       } = await supabase
         .from("predictions")
         .update({
-          points_awarded:
-            points,
+          points_awarded: points,
         })
         .eq(
           "id",
@@ -304,10 +264,7 @@ export default async () => {
         );
 
       if (updateError) {
-        console.error(
-          updateError
-        );
-
+        console.error(updateError);
         continue;
       }
 
@@ -318,8 +275,7 @@ export default async () => {
       JSON.stringify({
         message:
           "Prediction scoring completed.",
-        scored:
-          scoredCount,
+        scored: scoredCount,
       }),
       {
         status: 200,
@@ -330,9 +286,7 @@ export default async () => {
       }
     );
   } catch (error) {
-    console.error(
-      error
-    );
+    console.error(error);
 
     return new Response(
       JSON.stringify({
