@@ -4,11 +4,11 @@ import { supabase } from "../lib/supabaseClient";
 const TABS = [
   {
     id: "global",
-    label: "Global",
+    label: "Global League",
   },
   {
     id: "country",
-    label: "Country",
+    label: "Country League",
   },
 ];
 
@@ -37,12 +37,7 @@ function getStartOfWeek() {
     start.getDate() + difference
   );
 
-  start.setHours(
-    0,
-    0,
-    0,
-    0
-  );
+  start.setHours(0, 0, 0, 0);
 
   return start.toISOString();
 }
@@ -57,9 +52,15 @@ function getStartOfYear() {
   ).toISOString();
 }
 
-export default function Rankings({
-  user,
-}) {
+function getPeriodStart(period) {
+  if (period === "week") {
+    return getStartOfWeek();
+  }
+
+  return getStartOfYear();
+}
+
+export default function Rankings({ user }) {
   const [type, setType] =
     useState("global");
 
@@ -84,15 +85,15 @@ export default function Rankings({
 
     try {
       /*
-       * Get the signed-in user's country.
+       * Get the signed-in user's
+       * country.
        */
       let userCountry = "";
 
       if (user) {
         const {
           data: profile,
-          error:
-            profileError,
+          error: profileError,
         } = await supabase
           .from("profiles")
           .select(
@@ -115,26 +116,36 @@ export default function Rankings({
         setCountry(
           userCountry
         );
+      } else {
+        setCountry("");
       }
 
       /*
-       * Determine the beginning
-       * of the selected period.
+       * Find the beginning of
+       * the selected ranking period.
+       *
+       * WEEK:
+       * Monday → now
+       *
+       * YEAR:
+       * January 1 → now
+       *
+       * This means the ranking
+       * automatically resets when
+       * a new week or year begins.
        */
       const startDate =
-        period === "week"
-          ? getStartOfWeek()
-          : getStartOfYear();
+        getPeriodStart(
+          period
+        );
 
       /*
        * Get all point events
-       * since the beginning
-       * of the period.
+       * during the selected period.
        */
       const {
         data: events,
-        error:
-          eventsError,
+        error: eventsError,
       } = await supabase
         .from("point_events")
         .select(
@@ -150,14 +161,11 @@ export default function Rankings({
       }
 
       /*
-       * Get profiles so we can
-       * display usernames and
-       * countries.
+       * Get player profiles.
        */
       const {
         data: profiles,
-        error:
-          profilesError,
+        error: profilesError,
       } = await supabase
         .from("profiles")
         .select(
@@ -179,8 +187,8 @@ export default function Rankings({
         );
 
       /*
-       * Add points together
-       * for each user.
+       * Add up each player's
+       * points.
        */
       const totals =
         new Map();
@@ -193,18 +201,28 @@ export default function Rankings({
             );
 
           /*
-           * Country league:
-           * only include users
-           * from the same country.
+           * Country League:
+           *
+           * Only show players whose
+           * country matches the
+           * signed-in user's country.
            */
           if (
             type ===
-              "country" &&
-            userCountry &&
-            profile?.country !==
-              userCountry
+              "country"
           ) {
-            return;
+            if (
+              !userCountry
+            ) {
+              return;
+            }
+
+            if (
+              profile?.country !==
+              userCountry
+            ) {
+              return;
+            }
           }
 
           const current =
@@ -216,8 +234,7 @@ export default function Rankings({
             event.user_id,
             current +
               Number(
-                event.points ||
-                  0
+                event.points || 0
               )
           );
         }
@@ -225,7 +242,7 @@ export default function Rankings({
 
       /*
        * Convert totals into
-       * ranking objects.
+       * ranking players.
        */
       const results =
         Array.from(
@@ -260,18 +277,35 @@ export default function Rankings({
             }
           )
           .sort(
-            (a, b) =>
-              b.points -
-              a.points
+            (a, b) => {
+              /*
+               * Highest points first.
+               *
+               * If two players have
+               * the same points, sort
+               * alphabetically.
+               */
+              if (
+                b.points !==
+                a.points
+              ) {
+                return (
+                  b.points -
+                  a.points
+                );
+              }
+
+              return a.displayName.localeCompare(
+                b.displayName
+              );
+            }
           );
 
       setRankings(
         results
       );
     } catch (err) {
-      console.error(
-        err
-      );
+      console.error(err);
 
       setError(
         err?.message ||
@@ -286,6 +320,28 @@ export default function Rankings({
 
   useEffect(() => {
     loadRankings();
+  }, [
+    type,
+    period,
+    user,
+  ]);
+
+  /*
+   * Automatically refresh the
+   * rankings every 60 seconds.
+   */
+  useEffect(() => {
+    const timer =
+      setInterval(
+        () => {
+          loadRankings();
+        },
+        60000
+      );
+
+    return () => {
+      clearInterval(timer);
+    };
   }, [
     type,
     period,
@@ -331,26 +387,25 @@ export default function Rankings({
           </h1>
 
           <p>
-            Compete with
-            players around
-            the world or
-            against players
-            from your country.
+            Compete globally or
+            against players from
+            your country.
           </p>
         </div>
       </div>
 
+      {/* LEAGUE TYPE */}
       <div className="filters">
         {TABS.map(
           (tab) => (
             <button
               key={tab.id}
               type="button"
-              onClick={() =>
+              onClick={() => {
                 setType(
                   tab.id
-                )
-              }
+                );
+              }}
               className={
                 type ===
                 tab.id
@@ -363,18 +418,17 @@ export default function Rankings({
           )
         )}
 
+        {/* TIME PERIOD */}
         {PERIODS.map(
           (item) => (
             <button
-              key={
-                item.id
-              }
+              key={item.id}
               type="button"
-              onClick={() =>
+              onClick={() => {
                 setPeriod(
                   item.id
-                )
-              }
+                );
+              }}
               className={
                 period ===
                 item.id
@@ -388,6 +442,7 @@ export default function Rankings({
         )}
       </div>
 
+      {/* COUNTRY INFORMATION */}
       {type ===
         "country" && (
         <div
@@ -399,23 +454,24 @@ export default function Rankings({
         >
           {country ? (
             <>
-              🇶🇦{" "}
+              🌍{" "}
               <strong>
                 {country}
               </strong>{" "}
-              rankings
+              League
             </>
           ) : (
             <>
-              Select your
-              country in your
-              profile to join
-              a country league.
+              Select your country
+              in your profile to
+              join a Country
+              League.
             </>
           )}
         </div>
       )}
 
+      {/* CURRENT USER POSITION */}
       {currentUserRank && (
         <div
           className="ranking-your-position"
@@ -426,7 +482,10 @@ export default function Rankings({
         >
           Your position:{" "}
           <strong>
-            #{currentUserRank.rank}
+            #
+            {
+              currentUserRank.rank
+            }
           </strong>{" "}
           —{" "}
           <strong>
@@ -438,12 +497,30 @@ export default function Rankings({
         </div>
       )}
 
+      {/* PERIOD DESCRIPTION */}
+      <div
+        style={{
+          marginBottom:
+            "20px",
+          opacity: 0.65,
+          fontSize:
+            "0.9rem",
+        }}
+      >
+        {period ===
+        "week"
+          ? "Weekly rankings reset every Monday."
+          : "Yearly rankings reset every January 1."}
+      </div>
+
+      {/* LOADING */}
       {loading && (
         <div className="loading">
           Loading rankings...
         </div>
       )}
 
+      {/* ERROR */}
       {error &&
         !loading && (
           <div className="error">
@@ -451,18 +528,39 @@ export default function Rankings({
           </div>
         )}
 
+      {/* NO COUNTRY */}
       {!loading &&
         !error &&
-        rankings.length ===
-          0 && (
+        type ===
+          "country" &&
+        !country && (
           <div className="empty">
-            No points have
-            been earned during
-            this period yet.
+            Set your country in
+            your profile to join
+            a Country League.
           </div>
         )}
 
+      {/* NO RESULTS */}
       {!loading &&
+        !error &&
+        rankings.length ===
+          0 &&
+        !(
+          type ===
+            "country" &&
+          !country
+        ) && (
+          <div className="empty">
+            No points have been
+            earned during this
+            period yet.
+          </div>
+        )}
+
+      {/* RANKINGS */}
+      {!loading &&
+        !error &&
         rankings.length >
           0 && (
           <div className="ranking-list">
@@ -477,6 +575,7 @@ export default function Rankings({
                   }
                   className="ranking-row"
                 >
+                  {/* POSITION */}
                   <div className="ranking-position">
                     {index ===
                     0
@@ -493,6 +592,7 @@ export default function Rankings({
                         }`}
                   </div>
 
+                  {/* PLAYER */}
                   <div className="ranking-player">
                     {player.avatarUrl ? (
                       <img
@@ -558,6 +658,7 @@ export default function Rankings({
                     </div>
                   </div>
 
+                  {/* POINTS */}
                   <div className="ranking-points">
                     <strong>
                       {
